@@ -1,0 +1,22 @@
+# ESP32 / PlatformIO build artifacts
+esp32/.pio/
+esp32/.vscode/
+
+# Raspberry Pi
+raspberry-pi/__pycache__/
+raspberry-pi/*.pyc
+raspberry-pi/received_audio/
+raspberry-pi/.venv/
+raspberry-pi/venv/
+
+# Secrets — never commit WiFi credentials or API keys
+# (Update WIFI_SSID/WIFI_PASSWORD in main.cpp before flashing, but don't commit real values)
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE
+.idea/
+.vscode/
+*.swp
