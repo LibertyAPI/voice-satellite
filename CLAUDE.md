@@ -8,6 +8,17 @@ DIY voice assistant ("Voice Satellite") using an ESP32-S3 as a mic/speaker satel
 
 See PROJECT.md for full architecture, pin mappings, roadmap, and decisions log.
 
+## Keeping PROJECT.md Up To Date
+
+**This is critical.** When the user reports any of the following, immediately update PROJECT.md:
+- **Task completed or tested** → Check off the relevant `[ ]` → `[x]` in the Roadmap
+- **Breakthrough or milestone** → Update the `Current Status` section with what was achieved and the date
+- **New decision made** → Add an entry to the `Decisions Log` with choice, reasoning, and alternatives
+- **New issue discovered** → Add it as a task under the relevant Phase or to the `Todo` section
+- **Phase transition** → Update `Current Status` to reflect the new active phase
+
+Do not wait until the end of a session — update the log as things happen.
+
 ## Two Codebases
 
 This repo contains two independent projects that communicate over HTTP:
