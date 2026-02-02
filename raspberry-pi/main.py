@@ -1,23 +1,27 @@
 """
-Voice Satellite - Raspberry Pi Processing Hub
+Voice Satellite - Processing Hub Server
 
 FastAPI server that receives audio from ESP32 voice satellites,
-processes it through the STT → AI → TTS pipeline, and returns
-audio responses.
+processes it through the pipeline, and returns results.
 
-Phase 2 (current): Echo mode - receives audio and sends it back
-Phase 3+: Will add STT → AI → TTS pipeline
+Phase 2: Echo mode (returns same audio)
+Phase 3 (current): Cloud STT via OpenAI Whisper API
+Phase 4+: Will add AI → TTS pipeline
+
+Usage:
+    export OPENAI_API_KEY='sk-...'
+    python main.py
 """
 
-import io
-import wave
 import struct
 import time
 import logging
 from pathlib import Path
 
 from fastapi import FastAPI, Request
-from fastapi.responses import Response
+from fastapi.responses import JSONResponse, Response
+
+from services import stt_service
 
 # ============================================================
 # CONFIGURATION
@@ -25,7 +29,7 @@ from fastapi.responses import Response
 
 HOST = "0.0.0.0"       # Listen on all interfaces
 PORT = 8000
-AUDIO_DIR = Path("received_audio")  # Directory to save received audio for debugging
+AUDIO_DIR = Path("received_audio")
 
 # ============================================================
 # LOGGING
@@ -42,9 +46,8 @@ log = logging.getLogger("voice-hub")
 # APP
 # ============================================================
 
-app = FastAPI(title="Voice Satellite Hub", version="0.2.0")
+app = FastAPI(title="Voice Satellite Hub", version="0.3.0")
 
-# Create audio directory on startup
 AUDIO_DIR.mkdir(exist_ok=True)
 
 
@@ -53,10 +56,10 @@ async def health():
     """Health check endpoint."""
     return {
         "status": "ok",
-        "version": "0.2.0",
-        "phase": "echo-test",
+        "version": "0.3.0",
+        "phase": "cloud-stt",
         "services": {
-            "stt": "not_installed",
+            "stt": "openai-whisper" if stt_service.is_available() else "no_api_key",
             "ai": "not_installed",
             "tts": "not_installed",
         }
@@ -66,14 +69,17 @@ async def health():
 @app.post("/api/voice")
 async def process_voice(request: Request):
     """
-    Receive audio from ESP32, process it, return audio response.
+    Receive audio from ESP32, process through pipeline, return result.
 
-    Current mode: ECHO - returns the same audio back for round-trip testing.
-    Future: STT → AI → TTS pipeline.
+    Current mode:
+    - If OPENAI_API_KEY is set: transcribes audio via Whisper API
+    - If no API key: falls back to echo mode
+
+    Returns JSON with transcription (for now).
+    Future: will return audio once TTS is added.
     """
     start_time = time.time()
 
-    # Read raw body (ESP32 sends WAV with Content-Type: audio/wav)
     body = await request.body()
     content_type = request.headers.get("content-type", "unknown")
 
@@ -81,9 +87,13 @@ async def process_voice(request: Request):
 
     if len(body) < 44:
         log.warning("Audio too small (< WAV header size)")
-        return Response(content=b"", status_code=400)
+        return JSONResponse(
+            content={"error": "Audio too small"},
+            status_code=400
+        )
 
-    # Parse WAV header for logging
+    # Parse and log WAV info
+    wav_info = None
     try:
         wav_info = parse_wav_header(body)
         log.info(
@@ -95,31 +105,52 @@ async def process_voice(request: Request):
     except Exception as e:
         log.warning(f"Could not parse WAV header: {e}")
 
-    # Save to disk for debugging (optional - can disable later)
+    # Save to disk for debugging
     timestamp = int(time.time())
     save_path = AUDIO_DIR / f"recording_{timestamp}.wav"
     save_path.write_bytes(body)
     log.info(f"Saved to {save_path}")
 
     # ──────────────────────────────────────────────
-    # PIPELINE: Currently echo mode
-    # Future phases will replace this section:
-    #   Phase 3: transcript = stt_service.transcribe(body)
-    #   Phase 4: response   = ai_service.ask(transcript)
-    #   Phase 5: audio_out  = tts_service.speak(response)
+    # PIPELINE
     # ──────────────────────────────────────────────
 
-    response_audio = body  # Echo mode: return same audio
+    transcript = None
+    pipeline_mode = "echo"
+
+    # Phase 3: Cloud STT
+    if stt_service.is_available():
+        pipeline_mode = "cloud-stt"
+        try:
+            transcript = await stt_service.transcribe(body)
+            log.info(f">>> TRANSCRIPT: \"{transcript}\"")
+        except Exception as e:
+            log.error(f"STT failed: {e}")
+            transcript = f"[STT Error: {e}]"
+    else:
+        log.warning("No OPENAI_API_KEY set — running in echo mode")
+
+    # Phase 4 (future): AI response
+    # ai_response = await ai_service.ask(transcript)
+
+    # Phase 5 (future): TTS
+    # response_audio = await tts_service.speak(ai_response)
 
     elapsed = time.time() - start_time
-    log.info(f"Processing complete in {elapsed:.2f}s, returning {len(response_audio)} bytes")
+    log.info(f"Processing complete in {elapsed:.2f}s")
 
-    return Response(
-        content=response_audio,
-        media_type="audio/wav",
+    # Return transcription as JSON
+    # (Once TTS is added, this will return audio/wav instead)
+    return JSONResponse(
+        content={
+            "transcript": transcript,
+            "duration": wav_info["duration"] if wav_info else None,
+            "pipeline": pipeline_mode,
+            "processing_time": round(elapsed, 3),
+        },
         headers={
             "X-Processing-Time": f"{elapsed:.3f}",
-            "X-Pipeline-Mode": "echo",
+            "X-Pipeline-Mode": pipeline_mode,
         }
     )
 
@@ -129,7 +160,6 @@ def parse_wav_header(data: bytes) -> dict:
     if data[:4] != b'RIFF' or data[8:12] != b'WAVE':
         raise ValueError("Not a valid WAV file")
 
-    # fmt chunk starts at byte 12
     audio_format = struct.unpack_from('<H', data, 20)[0]
     channels = struct.unpack_from('<H', data, 22)[0]
     sample_rate = struct.unpack_from('<I', data, 24)[0]
@@ -155,9 +185,11 @@ def parse_wav_header(data: bytes) -> dict:
 if __name__ == "__main__":
     import uvicorn
 
+    stt_status = "READY" if stt_service.is_available() else "NO API KEY (echo mode)"
+
     log.info("=" * 50)
-    log.info("  Voice Satellite Hub - Raspberry Pi")
-    log.info("  Mode: ECHO TEST (Phase 2)")
+    log.info("  Voice Satellite Hub")
+    log.info(f"  STT: {stt_status}")
     log.info(f"  Listening on http://{HOST}:{PORT}")
     log.info("=" * 50)
 

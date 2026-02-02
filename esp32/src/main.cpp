@@ -20,7 +20,7 @@
 const char* WIFI_SSID     = "YOUR_WIFI_SSID";
 const char* WIFI_PASSWORD = "YOUR_WIFI_PASSWORD";
 
-// Raspberry Pi server address
+// Processing hub server address (Debian server / RPi / any machine on LAN)
 const char* SERVER_URL = "http://192.168.1.100:8000/api/voice";
 
 // ============================================================
@@ -278,32 +278,36 @@ void sendAudioToServer() {
     if (httpCode == 200) {
         Serial.printf("[HTTP] Response received: %d\n", httpCode);
 
-        // Get response audio
+        String contentType = http.header("Content-Type");
         int responseLen = http.getSize();
-        Serial.printf("[HTTP] Response audio size: %d bytes\n", responseLen);
 
-        if (responseLen > 0 && responseLen <= MAX_AUDIO_BYTES + WAV_HEADER_SIZE) {
-            // Read response audio into buffer (reuse the same buffer)
-            WiFiClient* stream = http.getStreamPtr();
-            size_t bytesRead = 0;
+        if (contentType.startsWith("audio/wav") && responseLen > WAV_HEADER_SIZE) {
+            // Response is audio — play it through the speaker
+            Serial.printf("[HTTP] Audio response: %d bytes\n", responseLen);
 
-            while (bytesRead < responseLen) {
-                size_t available = stream->available();
-                if (available) {
-                    size_t toRead = min(available, (size_t)(responseLen - bytesRead));
-                    size_t got = stream->readBytes(audioBuffer + bytesRead, toRead);
-                    bytesRead += got;
-                } else {
-                    delay(1);
+            if (responseLen <= MAX_AUDIO_BYTES + WAV_HEADER_SIZE) {
+                WiFiClient* stream = http.getStreamPtr();
+                size_t bytesRead = 0;
+
+                while (bytesRead < responseLen) {
+                    size_t available = stream->available();
+                    if (available) {
+                        size_t toRead = min(available, (size_t)(responseLen - bytesRead));
+                        size_t got = stream->readBytes(audioBuffer + bytesRead, toRead);
+                        bytesRead += got;
+                    } else {
+                        delay(1);
+                    }
                 }
+                playAudio(bytesRead);
+            } else {
+                Serial.println("[HTTP] Audio response too large for buffer.");
             }
-
-            Serial.printf("[HTTP] Downloaded %d bytes of response audio\n", bytesRead);
-            playAudio(bytesRead);
-        } else if (responseLen == 0) {
-            Serial.println("[HTTP] Empty response (server might be in echo-test mode).");
         } else {
-            Serial.println("[HTTP] Response too large for buffer.");
+            // Response is JSON or text — print it to serial (e.g. transcription result)
+            String body = http.getString();
+            Serial.println("[HTTP] Server response:");
+            Serial.println(body);
         }
     } else {
         Serial.printf("[HTTP] Error: %d - %s\n", httpCode, http.errorToString(httpCode).c_str());

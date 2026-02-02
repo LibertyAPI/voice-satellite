@@ -16,10 +16,10 @@ A DIY voice assistant system combining ESP32-S3 hardware with Raspberry Pi proce
   - Push-to-talk button
   - Status LED (optional, many boards have built-in)
 
-- **Raspberry Pi 4** (Processing Hub)
-  - Minimum 4GB RAM recommended for AI models
-  - MicroSD card (32GB+)
-  - Power supply
+- **Processing Hub** (Debian server — upgraded from Raspberry Pi 4)
+  - Any x86/ARM machine running Debian/Ubuntu on the local network
+  - More CPU/RAM headroom for AI processing
+  - Runs FastAPI server + cloud STT pipeline
 
 ### Data Flow Pipeline
 ```
@@ -29,7 +29,7 @@ ESP32-S3: Record audio via INMP441 microphone
   ↓
 WiFi: Send audio (WAV) to Raspberry Pi via HTTP POST
   ↓
-RPi: Speech-to-Text (faster-whisper)
+Server: Speech-to-Text (OpenAI Whisper API — cloud)
   ↓
 RPi: AI Processing (Claude Code CLI: `claude -p "transcribed text"`)
   ↓
@@ -51,10 +51,10 @@ ESP32: Play audio through PCM5102A DAC → Speaker
 **Raspberry Pi Server:**
 - Language: Python 3.9+
 - Web Framework: FastAPI + uvicorn
-- STT: faster-whisper (small or base model)
-- AI: Claude Code CLI (subprocess calls)
-- TTS: Piper TTS (local neural TTS)
-- Audio Processing: numpy, scipy, wave
+- STT: OpenAI Whisper API (cloud) via httpx
+- AI: Claude Code CLI (subprocess calls) — planned
+- TTS: Piper TTS (local neural TTS) — planned
+- Audio Processing: numpy, wave
 
 ## ESP32-S3 Pin Configuration
 
@@ -122,8 +122,9 @@ voice-satellite/
 │   ├── requirements.txt         # Python deps (fastapi, uvicorn, numpy) ✅
 │   ├── main.py                  # FastAPI server — echo mode for Phase 2 ✅
 │   ├── received_audio/          # Saved recordings for debugging (auto-created)
-│   └── services/                # (Phase 3+)
-│       ├── stt_service.py       # faster-whisper integration (planned)
+│   └── services/
+│       ├── __init__.py          # Package init ✅
+│       ├── stt_service.py       # OpenAI Whisper API integration ✅
 │       ├── ai_service.py        # Claude CLI integration (planned)
 │       └── tts_service.py       # Piper TTS integration (planned)
 └── docs/                         # Documentation (planned)
@@ -162,16 +163,16 @@ voice-satellite/
 - [ ] **TEST: Flash firmware and run echo round-trip**
 - [ ] **TEST: Verify WAV files saved on RPi are valid (play with aplay/audacity)**
 
-### Phase 3: STT Pipeline on RPi
-**Goal:** Convert speech to text reliably
+### Phase 3: Cloud STT Pipeline
+**Goal:** Convert speech to text reliably via cloud API
 
 **Tasks:**
-- [ ] Install faster-whisper on Raspberry Pi 4
-- [ ] Create STT service wrapper (stt_service.py)
-- [ ] Test transcription with sample audio files
-- [ ] Benchmark small vs base model (accuracy vs speed)
-- [ ] Implement audio preprocessing if needed (noise reduction, normalization)
-- [ ] Return transcribed text via API
+- [x] Create STT service wrapper (services/stt_service.py) using OpenAI Whisper API
+- [x] Integrate STT into /api/voice endpoint (auto-detects API key, falls back to echo)
+- [x] Update ESP32 to handle JSON responses (prints transcription to serial)
+- [x] Added httpx dependency for async HTTP calls to Whisper API
+- [ ] **TEST: Set OPENAI_API_KEY and test transcription with real audio**
+- [ ] **TEST: Verify transcription accuracy with ESP32 mic recordings**
 
 ### Phase 4: AI Integration
 **Goal:** Generate intelligent responses using Claude
@@ -224,16 +225,18 @@ voice-satellite/
 - [ ] Add local fallback responses when network/AI unavailable
 
 ## Current Status
-**Phase 2 — Code written, ready for hardware testing.**
+**Phase 3 — Cloud STT integrated, ready for testing. (2026-02-02)**
 - Phase 1: ✅ Hardware verified (I2S duplex, loopback, mic + DAC working)
-- Phase 2: 🔧 ESP32 firmware and RPi server code written. Awaiting flash + echo test.
-- Phases 3-7: Pending
+- Phase 2: ✅ ESP32 firmware + server code written (echo mode works)
+- Phase 3: 🔧 Cloud STT code written (OpenAI Whisper API). Awaiting API key test.
+- Platform: Switched from Raspberry Pi 4 to stronger Debian machine
+- Phases 4-7: Pending
 
 ## Todo
 - [ ] Flash ESP32 firmware and test PTT recording over serial
-- [ ] Set up Python venv on RPi and start FastAPI server
-- [ ] Run echo round-trip test (speak → ESP32 → RPi → ESP32 → speaker)
-- [ ] Move to Phase 3: Install faster-whisper on RPi
+- [ ] Set up Python venv on server, install deps, set OPENAI_API_KEY
+- [ ] Run full test: speak → ESP32 → server → Whisper API → transcription in logs
+- [ ] Move to Phase 4: AI integration (Claude Code CLI)
 
 ## Decisions Log
 
@@ -305,6 +308,26 @@ voice-satellite/
 - WebSocket streaming: Better latency but more complex (planned for v2)
 - MQTT: Adds broker dependency, unnecessary for 1:1 communication
 - Raw TCP: Lower-level complexity without significant benefit
+
+### 2026-02-02 - Platform Switch: RPi 4 → Debian Server
+**Choice:** Replace Raspberry Pi 4 with a more powerful Debian machine
+**Why:**
+- More CPU/RAM for running the processing pipeline
+- Still on local network, same architecture (ESP32 satellite → server hub)
+- All code is platform-agnostic Python + FastAPI, no changes needed for the switch
+
+### 2026-02-02 - STT Switch: Local faster-whisper → OpenAI Whisper API (Cloud)
+**Choice:** Use OpenAI's Whisper API instead of running faster-whisper locally
+**Why:**
+- Simpler setup (no model download, no GPU/CPU optimization)
+- Higher accuracy (cloud model is larger than what runs locally)
+- Faster transcription (offloads compute to OpenAI's servers)
+- Requires OPENAI_API_KEY environment variable and internet access
+
+**Alternatives considered:**
+- faster-whisper (local): Good for privacy/offline, but more setup and slower on CPU
+- Groq Whisper API: Faster and cheaper, same API pattern — easy to swap later
+- Deepgram: Good streaming support, could revisit for Phase 7 WebSocket upgrade
 
 ### 2026-01-29 - Protocol Selection: HTTP First, WebSocket Later
 **Choice:** HTTP POST for v1 (record-then-send), upgrade to WebSocket in v2

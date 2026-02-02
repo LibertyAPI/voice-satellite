@@ -53,19 +53,22 @@ Both sides must agree on this format. Changing it requires updating both codebas
 
 - **HTTP POST (not WebSocket):** Record full audio, send on button release. Simpler, and the ~0.3s upload overhead is negligible vs AI processing time. WebSocket planned for v2 when wake word replaces PTT.
 - **Single audioBuffer (ESP32):** One PSRAM-allocated buffer is reused for both recording and receiving response audio. The WAV header is written retroactively after recording stops (first 44 bytes reserved).
-- **Echo mode (RPi):** The server currently echoes received audio back. The pipeline placeholder in `process_voice()` shows where STT → AI → TTS services will be inserted.
+- **Cloud STT (OpenAI Whisper API):** The server sends received audio to OpenAI's Whisper API via `httpx`. Requires `OPENAI_API_KEY` env var. Falls back to echo mode if no key is set. Service is in `services/stt_service.py`.
+- **JSON response (current):** Server returns JSON with transcription. ESP32 detects Content-Type — plays `audio/wav` through speaker, prints anything else to serial. Will switch to audio responses once TTS is added.
 - **Claude Code CLI for AI:** Will use `claude -p "prompt"` via subprocess — each call is stateless (no conversation memory unless we pass context).
 
 ## Configuration That Must Be Updated Per-Deployment
 
 ESP32 `main.cpp` top section:
 - `WIFI_SSID` / `WIFI_PASSWORD` — WiFi credentials
-- `SERVER_URL` — RPi IP address and port
+- `SERVER_URL` — Server IP address and port
 - GPIO pin numbers if wiring differs from defaults
 
-## Planned Services (not yet implemented)
+Server environment:
+- `OPENAI_API_KEY` — Required for cloud STT. Without it, server runs in echo mode.
 
-`raspberry-pi/services/` will contain:
-- `stt_service.py` — faster-whisper wrapper
-- `ai_service.py` — Claude CLI subprocess wrapper
-- `tts_service.py` — Piper TTS wrapper
+## Services (`raspberry-pi/services/`)
+
+- `stt_service.py` — ✅ OpenAI Whisper API (async, uses httpx)
+- `ai_service.py` — Planned: Claude CLI subprocess wrapper
+- `tts_service.py` — Planned: Piper TTS wrapper
